@@ -25,6 +25,20 @@ class Authorization(StatesGroup):
     waiting_for_password = State() 
 
 
+class AuthState(StatesGroup):
+    AUTHORIZED = State()
+    UNAUTHORIZED = State()
+
+
+class AdminState(StatesGroup):
+    ADMIN = State()
+
+
+class AddNews(StatesGroup):
+    waiting_for_title = State()
+    waiting_for_text = State()
+
+
 @dp.message_handler(commands=['start'])
 async def help_command(message: types.Message):
     await message.reply(start_string)
@@ -47,7 +61,7 @@ async def get_name(message: types.Message, state: FSMContext):
     async with state.proxy() as data:
         data['login'] = message.text
 
-    con = sqlite3.connect('templates/db/users.db')
+    con = sqlite3.connect('templates/db/city_bot.db')
     cur = con.cursor()
     query = "SELECT login FROM users"
     logins = cur.execute(query).fetchall()
@@ -66,9 +80,9 @@ async def get_password(message: types.Message, state: FSMContext):
     async with state.proxy() as data:
         data['password'] = message.text
 
-    con = sqlite3.connect('templates/db/users.db')
+    con = sqlite3.connect('templates/db/city_bot.db')
     cur = con.cursor()
-    query = "INSERT INTO users (login, password, admin, authorized) VALUES (?, ?, false, false)"
+    query = "INSERT INTO users (login, password, admin) VALUES (?, ?, false)"
     cur.execute(query, (data['login'], data['password']))
     con.commit()
     
@@ -88,7 +102,7 @@ async def get_name(message: types.Message, state: FSMContext):
     async with state.proxy() as data:
         data['login'] = message.text
 
-    con = sqlite3.connect('templates/db/users.db')
+    con = sqlite3.connect('templates/db/city_bot.db')
     cur = con.cursor()
     query = "SELECT login FROM users"
     logins = cur.execute(query).fetchall()
@@ -107,18 +121,84 @@ async def get_password(message: types.Message, state: FSMContext):
     async with state.proxy() as data:
         data['password'] = message.text
 
-    con = sqlite3.connect('templates/db/users.db')
+    con = sqlite3.connect('templates/db/city_bot.db')
     cur = con.cursor()
     query = "SELECT password FROM users WHERE login = ?"
     password = cur.execute(query, (str(data['login']),)).fetchone()[0]
     if password == data['password']:
-        query = "UPDATE users SET authorized = true WHERE login = ? "
-        cur.execute(query, (str(data['login']),))
-        con.commit()
-        await state.finish()
+        await state.update_data(authorized=True)
+        await state.set_state(AuthState.AUTHORIZED)
         await message.reply('Вы авторизованы!')
+
+        query = "SELECT admin FROM users WHERE login = ?"
+        admin = cur.execute(query, (str(data['login']),)).fetchone()[0]
+        if admin == 1:
+            await message.answer("Функции администратора теперь доступны для Вас.")
+            await state.update_data(admin=True)
+            await state.set_state(AdminState.ADMIN)
+
+        await state.reset_state(with_data=False)
     else:
         await message.reply('Неверный пароль!')
+
+
+@dp.message_handler(commands=['get_news'])
+async def get_news(message: types.Message, state: FSMContext):
+    async with state.proxy() as data:
+        authorized = data.get('authorized', False)
+    if authorized:
+        await message.reply("Представляю Вашему вниманию несколько последних новостей")
+        con = sqlite3.connect('templates/db/city_bot.db')
+        cur = con.cursor()       
+        query = "SELECT title, text FROM news"
+        news = cur.execute(query).fetchall()
+        if len(news) < 5:
+            for element in news:
+                await message.answer(f"*_{element[0]}_*", parse_mode="MarkdownV2")
+                await message.answer(element[1])
+        else:
+            for x in range(5):
+                element = news[x]
+                await message.answer(f"*_{element[0]}_*", parse_mode="MarkdownV2")
+                await message.answer(element[1])
+        await message.answer("На данный момент актуальных новостей больше нет")
+    else:
+        await message.reply("Вы не авторизованы!")
+
+
+@dp.message_handler(commands=['add_news'])
+async def add_news(message: types.Message, state: FSMContext):
+    async with state.proxy() as data:
+        admin = data.get('admin', False)
+    if admin:
+        await message.reply("Итак, приступим. Введите заголовок новости...")
+        await AddNews.waiting_for_title.set()
+    else:
+        await message.reply("Вы не администратор!")
+
+
+@dp.message_handler(state=AddNews.waiting_for_title)
+async def get_password(message: types.Message, state: FSMContext):
+    async with state.proxy() as data:
+        data['title'] = message.text
+    
+    await AddNews.waiting_for_text.set()
+    await message.reply('Отлично, теперь введите текст новости...')
+
+
+@dp.message_handler(state=AddNews.waiting_for_text)
+async def get_password(message: types.Message, state: FSMContext):
+    async with state.proxy() as data:
+        data['text'] = message.text
+
+    con = sqlite3.connect('templates/db/city_bot.db')
+    cur = con.cursor()
+    query = "INSERT INTO news (title, text) VALUES (?, ?)"
+    cur.execute(query, (data['title'], data['text']))
+    con.commit()
+    
+    await state.reset_state(with_data=False)
+    await message.reply('Новость успешно добавлена!')
 
 
 if __name__ == "__main__":
